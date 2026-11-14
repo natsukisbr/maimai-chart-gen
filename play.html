@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>maimai 谱面预览 / 试听</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--line:#2b3444;--fg:#e6edf3;--dim:#8b98a9;--acc:#5ac8fa;--acc2:#ff7ab6}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+h1{font-size:16px;margin:0;font-weight:600}
+.tag{font-size:11.5px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:1px 9px}
+main{display:grid;grid-template-columns:minmax(360px,1fr) 380px;gap:16px;padding:16px;align-items:start}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}
+canvas{width:100%;display:block;border-radius:10px;background:#080b10}
+button{background:#21262d;color:var(--fg);border:1px solid var(--line);border-radius:8px;
+  padding:6px 14px;cursor:pointer;font-size:13px}
+button:hover{background:#2d333b}
+button.primary{background:#1f6feb;border-color:#1f6feb}
+input[type=range]{width:100%}
+pre{background:#080b10;border:1px solid var(--line);border-radius:8px;padding:10px;
+  font-size:11.5px;overflow:auto;max-height:300px;color:#a9b8c8}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
+select{background:#21262d;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:6px}
+.stat{display:flex;justify-content:space-between;font-size:12.5px;color:var(--dim);
+  border-bottom:1px dashed var(--line);padding:3px 0}
+.stat b{color:var(--fg);font-weight:500}
+#drop{border:2px dashed var(--line);border-radius:10px;padding:18px;text-align:center;
+  color:var(--dim);font-size:13px;margin:8px 0}
+#drop.on{border-color:var(--acc);color:var(--acc)}
+</style>
+</head>
+<body>
+<header>
+  <h1>maimai 谱面预览 / 试听</h1>
+  <span class="tag" id="titleTag">未载入</span>
+  <span class="tag" id="statTag"></span>
+</header>
+<main>
+  <div>
+    <div class="card" style="padding:8px">
+      <canvas id="cv" height="620"></canvas>
+      <div class="row">
+        <button id="btnPlay" class="primary">▶ 播放</button>
+        <button id="btnReset">⟲ 复位</button>
+        <input type="range" id="seek" min="0" max="1000" value="0" style="flex:1">
+        <span id="timeLabel" style="font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums">0.00s</span>
+      </div>
+      <div class="row">
+        <label style="font-size:12.5px;color:var(--dim)">速度
+          <select id="speed">
+            <option value="0.5">0.5x</option>
+            <option value="0.75">0.75x</option>
+            <option value="1" selected>1x</option>
+            <option value="1.5">1.5x</option>
+            <option value="2">2x</option>
+          </select>
+        </label>
+        <label style="font-size:12.5px;color:var(--dim)">下落时间
+          <input type="range" id="lead" min="0.5" max="2.5" step="0.1" value="1.2" style="width:110px">
+        </label>
+        <label style="font-size:12.5px;color:var(--dim)"><input type="checkbox" id="showSlides" checked> 显示星星</label>
+      </div>
+    </div>
+  </div>
+  <div>
+    <div class="card">
+      <div id="drop">把 <b>mp3</b> 拖进来可以边听边看；<br>把 <b>maidata.txt / *_maidata.txt</b> 拖进来可以换谱。</div>
+      <div class="row">
+        <button id="btnDemo">载入随机官谱</button>
+        <button id="btnLast">载入上次生成</button>
+      </div>
+      <div id="stats"></div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <div style="font-size:12.5px;color:var(--dim);margin-bottom:6px">谱面文本</div>
+      <pre id="txt">（空）</pre>
+    </div>
+  </div>
+</main>
+<script src="last_chart.js" onerror="void 0"></script>
+<script src="demo_charts.js" onerror="void 0"></script>
+<script>
+/* ------------------------------------------------------------------ */
+/* simai parser (subset sufficient for viewing anything maidata-like) */
+/* ------------------------------------------------------------------ */
+const BTN_DEG = {}; for(let i=1;i<=8;i++) BTN_DEG[i] = -90 + (i-1)*45;  // 1=top, clockwise
+
+function parseSimai(txt){
+  const lines = txt.replace(/\r/g,'').split('\n');
+  let bpm = 120, chart = null, charts = {};
+  let curLevel = null, body = [];
+  const flush = ()=>{ if(curLevel!==null){ charts[curLevel] = body.join('\n'); } body=[]; };
+  for(const ln of lines){
+    const m = ln.match(/^&([A-Za-z0-9_]+)=(.*)$/);
+    if(m){
+      if(m[1].startsWith('inote_')){ flush(); curLevel = +m[1].split('_')[1]; body=[m[2]]; }
+      continue;
+    }
+    if(curLevel!==null) body.push(ln);
+  }
+  flush();
+  return charts;
+}
+
+function buildChart(text, level){
+  const charts = parseSimai(text);
+  const keys = Object.keys(charts).map(Number).sort((a,b)=>a-b);
+  const lv = (level && charts[level]) ? level : keys[keys.length-1];
+  const code = charts[lv]; if(!code) return null;
+  let bpm = 120, grid = 4, beat = 0;
+  const notes = [];
+  const lines = code.split('\n');
+  for(const raw of lines){
+    let ln = raw.trim(); if(!ln) continue;
+    if(ln === 'E' || ln === 'e') continue;      // chart terminator
+    const hm = ln.match(/^\(([0-9.]+)\)(?:\{([0-9]+)\})?(.*)$/);
+    if(hm){ bpm = +hm[1]; if(hm[2]) grid = +hm[2]; ln = hm[3]; if(!ln.trim()){ beat += 4; continue; } }
+    let parts = ln.split(',');
+    if(parts.length && parts[parts.length-1].trim()==='') parts = parts.slice(0,-1);
+    for(const tokRaw of parts){
+      let tok = tokRaw.trim();
+      const gm = tok.match(/^\{([0-9]+)\}(.*)$/);
+      if(gm){ grid = +gm[1]; tok = gm[2]; }
+      if(tok){
+        for(const part of tok.split('/')){
+          const p = part.trim(); if(!p) continue;
+          const bm = p.match(/^([1-8])(.*)$/); if(!bm) continue;
+          const start = +bm[1]; let rest = bm[2];
+          const ex = /x/.test(rest.split('[')[0]);
+          const brk = /b$/.test(rest.replace(/\[[^\]]*\]/g,''));
+          let dur = 0;
+          const dm = rest.match(/\[([0-9]+):([0-9]+)\]/);
+          if(dm) dur = (+dm[2])/(+dm[1])*4;   // in beats
+          if(/h/.test(rest)){
+            notes.push({beat, type:'hold', btn:start, dur, ex, brk});
+          } else {
+            const sm = rest.replace(/\[[^\]]*\]/g,'').match(/(pp|qq|[-\^<>vVwszpq])([1-8])/);
+            if(sm){
+              notes.push({beat, type:'slide', btn:start, target:+sm[2], op:sm[1], dur, ex, brk});
+            } else {
+              notes.push({beat, type:'tap', btn:start, dur:0, ex, brk});
+            }
+          }
+        }
+      }
+      beat += 4/grid;
+    }
+  }
+  return {bpm, notes, level: lv, lengthBeats: beat};
+}
+
+/* ------------------------------------------------------------------ */
+/* renderer                                                            */
+/* ------------------------------------------------------------------ */
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+let chart = null, audio = null, audioUrl = null, playing = false, t0 = 0, elapsed = 0;
+let audioOffset = 0;
+
+function resize(){
+  const dpr = window.devicePixelRatio||1;
+  const w = cv.clientWidth, h = 620;
+  cv.width = w*dpr; cv.height = h*dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  cv._w = w; cv._h = h;
+}
+window.addEventListener('resize', ()=>{resize(); draw();});
+
+function geom(){
+  const w = cv._w, h = cv._h;
+  const cx = w/2, cy = h/2 + 10;
+  const R = Math.min(w,h)*0.36;
+  return {cx, cy, R, r: R*0.30};
+}
+
+function posOf(btn, R, cx, cy, scale){
+  const deg = BTN_DEG[btn] * Math.PI/180;
+  return [cx + Math.cos(deg)*R*scale, cy + Math.sin(deg)*R*scale];
+}
+
+function secOf(beat){ return beat*60/chart.bpm; }
+
+function draw(){
+  if(!cv._w){ resize(); }
+  const w = cv._w, h = cv._h;
+  ctx.clearRect(0,0,w,h);
+  // background rings
+  const {cx, cy, R, r} = geom();
+  ctx.strokeStyle = '#1b2430'; ctx.lineWidth = 1;
+  for(let k=1;k<=6;k++){
+    ctx.beginPath(); ctx.arc(cx,cy,R*k/6,0,Math.PI*2); ctx.stroke();
+  }
+  ctx.strokeStyle = '#2b3444'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(cx,cy,R,0,Math.PI*2); ctx.stroke();
+
+  if(!chart){ ctx.fillStyle='#8b98a9'; ctx.font='14px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('拖入谱面或点击「载入上次生成」', cx, cy); return; }
+
+  // buttons
+  for(let b=1;b<=8;b++){
+    const [x,y] = posOf(b, R, cx, cy, 1);
+    let active = false;
+    for(const n of chart.notes){
+      const tt = secOf(n.beat);
+      if(Math.abs(tt - now) < 0.09 && (n.btn===b || n.target===b)) active = true;
+    }
+    ctx.beginPath(); ctx.arc(x,y, R*0.085, 0, Math.PI*2);
+    ctx.fillStyle = active ? 'rgba(90,200,250,.95)' : 'rgba(90,200,250,.14)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(90,200,250,.55)'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = active ? '#04121c' : '#8b98a9'; ctx.font = 'bold 12px sans-serif';
+    ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(b, x, y);
+  }
+
+  const lead = parseFloat(document.getElementById('lead').value);
+  const win = [now - 0.15, now + lead];
+  const showSlides = document.getElementById('showSlides').checked;
+
+  // slides first
+  if(showSlides) for(const n of chart.notes){
+    if(n.type!=='slide') continue;
+    const s = secOf(n.beat);
+    if(s < win[0] || s > win[1]+0.5) continue;
+    const p = 1 - (s - now)/lead;
+    if(p < 0) continue;
+    const sc = 0.30 + 0.70*Math.min(1,p);
+    const [x1,y1] = posOf(n.btn, R, cx, cy, sc);
+    const [x2,y2] = posOf(n.target, R, cx, cy, sc);
+    ctx.strokeStyle = n.brk ? 'rgba(255,180,60,.65)' : 'rgba(255,122,182,.65)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    if(n.op === 'w'){
+      // rim: draw along the outer circle
+      const a1 = BTN_DEG[n.btn]*Math.PI/180, a2 = BTN_DEG[n.target]*Math.PI/180;
+      let d = a2-a1; while(d> Math.PI) d-=2*Math.PI; while(d<-Math.PI) d+=2*Math.PI;
+      ctx.arc(cx,cy,R*sc*1.02,a1,a1+d, d<0); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx,cy,R*sc,a1,a1+d, d<0); ctx.strokeStyle='rgba(255,122,182,.28)'; ctx.stroke();
+    } else {
+      ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+    }
+    const [sx,sy] = posOf(n.btn, R, cx, cy, sc);
+    star(sx, sy, R*0.07, n.brk ? '#ffb43c' : '#ff7ab6');
+    ctx.beginPath(); ctx.arc(x1,y1,R*0.085,0,Math.PI*2);
+    ctx.strokeStyle = n.brk?'rgba(255,180,60,.8)':'rgba(255,122,182,.85)'; ctx.lineWidth=2; ctx.stroke();
+  }
+
+  // taps / holds
+  const order = chart.notes.filter(n=>n.type!=='slide').sort((a,b)=>a.beat-b.beat);
+  for(const n of order){
+    const s = secOf(n.beat);
+    const hdur = n.dur*60/chart.bpm;
+    if(s + hdur < win[0] || s > win[1]) continue;
+    const p = (s - now)/lead;                  // 1 -> far future, 0 -> hits now
+    const sc = 1 - 0.7*Math.max(0, Math.min(1, 1-p)) ;
+    const scale = 0.30 + 0.70*Math.max(0, Math.min(1, p));
+    const [x,y] = posOf(n.btn, R, cx, cy, scale);
+    const col = n.brk ? '#ffb43c' : (n.ex ? '#ff7ab6' : '#5ac8fa');
+    if(n.type==='hold'){
+      const pa = Math.max(0,(s+hdur-now)/lead);
+      const [x2,y2] = posOf(n.btn, R, cx, cy, 0.30+0.70*Math.max(0,Math.min(1,pa)));
+      ctx.strokeStyle = col+'99'; ctx.lineWidth = R*0.06;
+      ctx.beginPath(); ctx.moveTo(x2,y2); ctx.lineTo(x,y); ctx.stroke();
+    }
+    const rr = R*0.062*(n.brk?1.25:1);
+    ctx.beginPath(); ctx.arc(x,y,rr,0,Math.PI*2);
+    ctx.fillStyle = col; ctx.fill();
+    if(n.ex){ ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.stroke(); }
+  }
+
+  // now line / info
+  ctx.fillStyle='#6b7787'; ctx.font='11.5px sans-serif'; ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+  ctx.fillText('BPM ' + chart.bpm.toFixed(2) + '   Lv ' + chart.level +
+               '   notes ' + chart.notes.length, 12, 18);
+}
+
+function star(x,y,r,col){
+  ctx.beginPath();
+  for(let i=0;i<10;i++){
+    const a = -Math.PI/2 + i*Math.PI/5;
+    const rr = i%2? r*0.45: r;
+    const px = x + Math.cos(a)*rr, py = y + Math.sin(a)*rr;
+    i?ctx.lineTo(px,py):ctx.moveTo(px,py);
+  }
+  ctx.closePath(); ctx.fillStyle = col; ctx.fill();
+}
+
+/* ------------------------------------------------------------------ */
+/* clock                                                               */
+/* ------------------------------------------------------------------ */
+let now = 0, lastT = 0;
+function loop(ts){
+  if(!lastT) lastT = ts;
+  const dt = (ts-lastT)/1000; lastT = ts;
+  if(playing){
+    const sp = parseFloat(document.getElementById('speed').value);
+    elapsed += dt*sp;
+    if(audio && !audio.paused){ elapsed = audio.currentTime; }
+    now = elapsed - audioOffset;
+    const total = chart ? secOf(chart.lengthBeats) : 0;
+    if(chart && now > total + 1.5){ playing=false; }
+    document.getElementById('seek').value = Math.min(1000, 1000*Math.max(0,now)/Math.max(total,1));
+    document.getElementById('timeLabel').textContent = Math.max(0,now).toFixed(2)+'s';
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
+
+/* ------------------------------------------------------------------ */
+/* loading                                                             */
+/* ------------------------------------------------------------------ */
+function setChart(text, name){
+  const c = buildChart(text);
+  if(!c){ alert('没能解析这张谱面'); return; }
+  chart = c; now = 0; elapsed = 0; playing = false;
+  document.getElementById('txt').textContent = text.slice(0,6000) + (text.length>6000?'\n…':'');
+  document.getElementById('titleTag').textContent = name || 'chart';
+  const kinds = {tap:0,hold:0,slide:0};
+  chart.notes.forEach(n=>kinds[n.type]=(kinds[n.type]||0)+1);
+  const meas = chart.lengthBeats/4;
+  document.getElementById('statTag').textContent =
+    `Lv${c.level} · ${chart.notes.length} notes · ${(chart.notes.length/meas).toFixed(1)}/小节 · 星星 ${kinds.slide}`;
+  document.getElementById('stats').innerHTML =
+    `<div class="stat"><span>BPM</span><b>${c.bpm.toFixed(2)}</b></div>
+     <div class="stat"><span>小节数</span><b>${meas.toFixed(1)}</b></div>
+     <div class="stat"><span>tap / hold / slide</span><b>${kinds.tap} / ${kinds.hold} / ${kinds.slide}</b></div>
+     <div class="stat"><span>Break / EX</span><b>${chart.notes.filter(n=>n.brk).length} / ${chart.notes.filter(n=>n.ex).length}</b></div>
+     <div class="stat"><span>双押占比</span><b>${doubleRate().toFixed(1)}%</b></div>`;
+  draw();
+}
+function doubleRate(){
+  if(!chart) return 0;
+  const byBeat = {};
+  chart.notes.forEach(n=>{ byBeat[n.beat] = (byBeat[n.beat]||0)+1; });
+  const ks = Object.keys(byBeat);
+  const dbl = ks.filter(k=>byBeat[k]>=2).length;
+  return 100*dbl/Math.max(ks.length,1);
+}
+
+document.getElementById('btnPlay').onclick = ()=>{
+  playing = !playing;
+  document.getElementById('btnPlay').textContent = playing ? '⏸ 暂停' : '▶ 播放';
+  if(audio){
+    if(playing){ audio.currentTime = Math.max(0, now); audio.play(); } else audio.pause();
+  } else {
+    elapsed = Math.max(0, now);
+  }
+  lastT = 0;
+};
+document.getElementById('btnReset').onclick = ()=>{ now = 0; elapsed = 0; playing = false;
+  document.getElementById('btnPlay').textContent='▶ 播放';
+  if(audio) audio.currentTime = 0; draw(); };
+document.getElementById('seek').oninput = (e)=>{
+  if(!chart) return;
+  const total = secOf(chart.lengthBeats);
+  now = total * e.target.value/1000; elapsed = now;
+  if(audio) audio.currentTime = Math.max(0, now);
+  draw();
+};
+document.getElementById('btnLast').onclick = ()=>{
+  if(window.LAST_CHART) setChart(window.LAST_CHART, window.LAST_CHART_NAME||'last_chart');
+  else alert('还没有生成过谱面。先运行 make_chart.py。');
+};
+document.getElementById('btnDemo').onclick = ()=>{
+  if(window.DEMO_CHARTS && window.DEMO_CHARTS.length){
+    const i = Math.floor(Math.random()*window.DEMO_CHARTS.length);
+    setChart(window.DEMO_CHARTS[i].text, window.DEMO_CHARTS[i].name);
+  } else alert('demo_charts.js 未载入');
+};
+
+function loadFile(f){
+  if(/\.(mp3|wav|ogg|flac|m4a)$/i.test(f.name)){
+    if(audioUrl) URL.revokeObjectURL(audioUrl);
+    audioUrl = URL.createObjectURL(f);
+    audio = new Audio(audioUrl);
+    audio.addEventListener('loadedmetadata', ()=>{ draw(); });
+    document.getElementById('titleTag').textContent = f.name;
+    return;
+  }
+  const rd = new FileReader();
+  rd.onload = ()=> setChart(String(rd.result), f.name);
+  rd.readAsText(f, 'utf-8');
+}
+const drop = document.getElementById('drop');
+['dragenter','dragover'].forEach(e=>drop.addEventListener(e, ev=>{ev.preventDefault();drop.classList.add('on');}));
+['dragleave','drop'].forEach(e=>drop.addEventListener(e, ev=>{ev.preventDefault();drop.classList.remove('on');}));
+drop.addEventListener('drop', ev=>{ if(ev.dataTransfer.files[0]) loadFile(ev.dataTransfer.files[0]); });
+document.addEventListener('dragover', e=>e.preventDefault());
+document.addEventListener('drop', e=>{
+  e.preventDefault();
+  if(e.dataTransfer.files[0] && !drop.contains(e.target)) loadFile(e.dataTransfer.files[0]);
+});
+
+if(window.LAST_CHART){
+  setChart(window.LAST_CHART, window.LAST_CHART_NAME||'last_chart');
+} else {
+  var _ls = null;
+  try { _ls = localStorage.getItem('dsh_last_chart'); } catch(e) {}
+  if(_ls) setChart(_ls, (function(){try{return localStorage.getItem('dsh_last_chart_name')}catch(e){return 'generated'}})() || 'generated');
+  else draw();
+}
+resize(); requestAnimationFrame(loop);
+</script>
+</body>
+</html>
