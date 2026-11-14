@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>maimai 自动写谱 · 纯浏览器版</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#0b0e14;--panel:#131820;--line:#232b38;--fg:#e6edf3;--dim:#7c8899;
+      --acc:#4cc2ff;--acc2:#ff7ab6;--ok:#3fb950;--warn:#d29922;--bad:#f85149}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-size:14px;line-height:1.65;
+  font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:14px 22px;
+  border-bottom:1px solid var(--line);background:#0e131b;position:sticky;top:0;z-index:20}
+h1{font-size:16px;margin:0;font-weight:600}
+.tag{font-size:11.5px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:2px 10px}
+.spacer{flex:1}
+main{max-width:900px;margin:0 auto;padding:20px 22px 80px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:14px 0}
+h2{font-size:14px;margin:0 0 10px;color:var(--acc)}
+label{font-size:12.5px;color:var(--dim);display:block;margin-bottom:4px}
+input[type=number],input[type=text],select{width:100%;background:#0d131c;border:1px solid var(--line);
+  color:var(--fg);border-radius:8px;padding:7px 10px;font-size:13.5px}
+input[type=file]{background:#0d131c;border:1px dashed var(--line);border-radius:8px;
+  padding:10px;color:var(--dim);width:100%;font-size:12.5px}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+.row > div{flex:1;min-width:120px}
+button{background:#1b2230;color:var(--fg);border:1px solid var(--line);border-radius:9px;
+  padding:8px 18px;font-size:13.5px;cursor:pointer;transition:.12s}
+button:hover:not(:disabled){background:#243044;border-color:#33415a}
+button:disabled{opacity:.4;cursor:not-allowed}
+button.go{background:#1f6feb;border-color:#1f6feb}
+button.go:hover:not(:disabled){background:#2f7ff5}
+#drop{border:2px dashed var(--line);border-radius:11px;padding:26px;text-align:center;
+  color:var(--dim);font-size:13.5px;transition:.15s}
+#drop.on{border-color:var(--acc);color:var(--acc);background:#0e1a26}
+.bar{height:7px;background:#0d131c;border-radius:99px;overflow:hidden;margin:12px 0 6px}
+.bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#1f6feb,#4cc2ff);transition:width .25s}
+.status{font-size:12.5px;color:var(--dim);min-height:18px}
+pre{background:#080b10;border:1px solid var(--line);border-radius:9px;padding:12px;
+  overflow:auto;max-height:300px;font-size:11.5px;color:#a9b8c8;margin:8px 0 0}
+.kv{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--dim);margin-top:10px}
+.kv b{color:var(--fg);font-weight:600}
+.ok{color:var(--ok)} .bad{color:var(--bad)} .warn{color:var(--warn)}
+.hint{font-size:12px;color:var(--dim);margin-top:8px}
+footer{text-align:center;color:var(--dim);font-size:12px;padding:26px}
+</style>
+</head>
+<body>
+<header>
+  <h1>maimai 自动写谱 · 纯浏览器</h1>
+  <span class="tag">模型在本页内运行，无需 Python / 无需联网</span>
+  <span class="spacer"></span>
+  <span class="tag" id="modelTag">权重加载中…</span>
+</header>
+
+<main>
+  <div class="card">
+    <h2>1 · 选歌</h2>
+    <div class="row">
+      <div style="flex:2">
+        <label>方式 A（推荐，可写回原目录）</label>
+        <button id="btnDir">选择歌曲所在的文件夹…</button>
+      </div>
+      <div style="flex:2">
+        <label>方式 B（拖入 / 选择 mp3，保存时再选位置）</label>
+        <input type="file" id="fileIn" accept="audio/*,.mp3">
+      </div>
+    </div>
+    <div id="drop">把 <b>track.mp3</b> 拖到这里</div>
+    <div class="row" style="margin-top:10px">
+      <div><label>当前文件</label><div class="status" id="fileTag">（未选择）</div></div>
+      <div id="dirSelWrap" style="display:none">
+        <label>文件夹里的音频</label>
+        <select id="dirSel"></select>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>2 · 参数</h2>
+    <div class="row">
+      <div><label>BPM</label><input type="number" id="bpm" value="180" step="0.001" min="30" max="400"></div>
+      <div><label>offset（秒，第一小节第一拍的时刻）</label><input type="number" id="offset" value="0" step="0.001"></div>
+      <div><label>难度</label>
+        <select id="level">
+          <option value="5" selected>Lv.5 Master</option>
+          <option value="6">Lv.6 Re:Master</option>
+        </select>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <div style="flex:2"><label>曲名（写进 &amp;title=）</label><input type="text" id="title" placeholder="留空则用文件名"></div>
+      <div style="flex:2"><label>曲师（写进 &amp;artist=，可空）</label><input type="text" id="artist" placeholder=""></div>
+      <div style="flex:1"><label>谱师（&amp;des=）</label><input type="text" id="des" value="AI"></div>
+    </div>
+    <p class="hint">本模型的权重是<b>只用 Lv.5 官谱</b>训练出来的，选 Lv.6 只是套用同一套先验，效果会偏稀。</p>
+  </div>
+
+  <div class="card">
+    <h2>3 · 生成</h2>
+    <div class="row" style="align-items:center">
+      <button class="go" id="btnRun" disabled>开始写谱</button>
+      <button id="btnSave" disabled>保存 maidata.txt</button>
+      <button id="btnPreview" disabled>在播放器里预览</button>
+    </div>
+    <div class="bar"><i id="barFill"></i></div>
+    <div class="status" id="status">等待选择音频…</div>
+    <div class="kv" id="stats"></div>
+    <pre id="out">（还没有生成）</pre>
+  </div>
+
+  <div class="card">
+    <h2>说明</h2>
+    <ul style="margin:0 0 0 18px;padding:0;color:#c2ccd8;font-size:13px">
+      <li>推理完全在浏览器里跑：STFT → Mel → 逐 96 分音特征 → 卷积网络 → 解码 → 双手调度。</li>
+      <li>「方式 A」会请求文件夹读写权限，生成后直接把 <code>maidata.txt</code> 写回<b>这首歌所在的目录</b>；
+          若目录里已有同名文件会先询问是否覆盖。</li>
+      <li>「方式 B」拿不到目录信息，保存时会弹出浏览器的「另存为」，由浏览器负责覆盖确认。</li>
+      <li>offset 不知道可以先填 0；如果整体节奏偏移，把 offset 调成 -0.03~0.03 之间试试。</li>
+    </ul>
+  </div>
+</main>
+
+<footer>ChartNet · 96th-of-a-measure grid · pure browser inference</footer>
+
+<script src="weights.js"></script>
+<script src="templates.js?v=3"></script>
+<script src="js/chartnet.js"></script>
+<script>
+var $ = function (s) { return document.querySelector(s); };
+var pcm = null, curName = '', dirHandle = null, lastText = '', lastEvents = [];
+
+function setStatus(t, cls) {
+  var el = $('#status');
+  el.textContent = t;
+  el.className = 'status' + (cls ? ' ' + cls : '');
+}
+function setBar(p) { $('#barFill').style.width = Math.round(p * 100) + '%'; }
+
+window.addEventListener('load', function () {
+  try {
+    if (!window.WEIGHTS) throw new Error('weights.js 未加载');
+    ChartNet.setWeights(window.WEIGHTS);
+  if (window.TEMPLATES) { try { ChartNet.setTemplates(window.TEMPLATES); } catch (e) { console.warn('模板库加载失败', e); } }
+    var p = window.WEIGHTS.meta ? window.WEIGHTS.meta.n_params : 0;
+    $('#modelTag').textContent = '模型就绪 · ' + (p / 1000).toFixed(0) + 'k 参数';
+    $('#modelTag').className = 'tag ok';
+  } catch (e) {
+    $('#modelTag').textContent = '权重加载失败: ' + e.message;
+    $('#modelTag').className = 'tag bad';
+  }
+});
+
+/* ---------------------------------------------------------------- audio */
+async function decodeToPcm(arrayBuffer) {
+  var ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 22050 });
+  var buf = await ctx.decodeAudioData(arrayBuffer);
+  var ch = buf.numberOfChannels;
+  var n = buf.length;
+  var out = new Float32Array(n);
+  for (var c = 0; c < ch; c++) {
+    var d = buf.getChannelData(c);
+    for (var i = 0; i < n; i++) out[i] += d[i] / ch;
+  }
+  try { ctx.close(); } catch (e) {}
+  return { pcm: out, sr: buf.sampleRate, dur: n / buf.sampleRate };
+}
+
+async function loadFromFile(file, nameHint) {
+  setStatus('解码音频 ' + file.name + ' …');
+  setBar(0.02);
+  var ab = await file.arrayBuffer();
+  var r = await decodeToPcm(ab);
+  pcm = r.pcm;
+  curName = nameHint || file.name;
+  $('#fileTag').textContent = curName + '  ·  ' + r.dur.toFixed(1) + 's  ·  ' +
+                              (pcm.length / 22050).toFixed(0) + 'k samples @22050';
+  $('#fileTag').className = 'status ok';
+  $('#btnRun').disabled = false;
+  setStatus('音频已就绪，填好 BPM / offset 后点「开始写谱」。');
+  setBar(0);
+}
+
+/* directory mode ---------------------------------------------------- */
+$('#btnDir').onclick = async function () {
+  if (!window.showDirectoryPicker) {
+    alert('这个浏览器不支持文件夹写入（需要 Chrome / Edge）。请用「方式 B」。');
+    return;
+  }
+  try {
+    dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+  } catch (e) { return; }
+  var items = [];
+  for await (var entry of dirHandle.values()) {
+    if (entry.kind === 'file' && /\.(mp3|wav|ogg|flac|m4a)$/i.test(entry.name)) items.push(entry);
+  }
+  if (!items.length) {
+    setStatus('这个文件夹里没有音频文件。', 'bad');
+    return;
+  }
+  items.sort(function (a, b) { return a.name.localeCompare(b.name); });
+  var sel = $('#dirSel');
+  sel.innerHTML = '';
+  items.forEach(function (it, i) {
+    var o = document.createElement('option');
+    o.value = String(i); o.textContent = it.name;
+    sel.appendChild(o);
+  });
+  $('#dirSelWrap').style.display = '';
+  var pick = async function (idx) {
+    var f = await items[idx].getFile();
+    await loadFromFile(f, items[idx].name);
+    setStatus('已选择 ' + items[idx].name + '（生成后会写回同一文件夹）');
+  };
+  sel.onchange = function () { pick(+sel.value); };
+  var prefer = items.findIndex(function (it) { return /^track\.mp3$/i.test(it.name); });
+  sel.value = String(prefer >= 0 ? prefer : 0);
+  await pick(prefer >= 0 ? prefer : 0);
+  $('#fileIn').value = '';
+};
+
+/* file input / drag-drop -------------------------------------------- */
+$('#fileIn').onchange = function (e) {
+  if (e.target.files[0]) { dirHandle = null; $('#dirSelWrap').style.display = 'none';
+                           loadFromFile(e.target.files[0]); }
+};
+var drop = $('#drop');
+['dragenter', 'dragover'].forEach(function (ev) {
+  drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('on'); });
+});
+['dragleave', 'drop'].forEach(function (ev) {
+  drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('on'); });
+});
+drop.addEventListener('drop', function (e) {
+  e.preventDefault();
+  var f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (!f) return;
+  if (!/\.(mp3|wav|ogg|flac|m4a)$/i.test(f.name)) { alert('请拖入音频文件'); return; }
+  dirHandle = null; $('#dirSelWrap').style.display = 'none'; $('#fileIn').value = '';
+  loadFromFile(f);
+});
+document.addEventListener('dragover', function (e) { e.preventDefault(); });
+document.addEventListener('drop', function (e) { e.preventDefault(); });
+
+/* ---------------------------------------------------------------- run */
+$('#btnRun').onclick = async function () {
+  if (!pcm) { alert('先选择音频'); return; }
+  var bpm = parseFloat($('#bpm').value);
+  var off = parseFloat($('#offset').value) || 0;
+  var level = parseInt($('#level').value, 10) || 5;
+  if (!(bpm > 20 && bpm < 400)) { alert('BPM 看起来不对'); return; }
+
+  $('#btnRun').disabled = true; $('#btnSave').disabled = true; $('#btnPreview').disabled = true;
+  setStatus('计算中…（这一步会占满一个核，请稍等）');
+  setBar(0.05);
+  await new Promise(function (r) { setTimeout(r, 30); });
+
+  var t0 = performance.now();
+  var meta = {
+    title: $('#title').value || (curName || '').replace(/\.[^.]+$/, ''),
+    artist: $('#artist').value || '',
+    des: $('#des').value || 'AI'
+  };
+  var res;
+  try {
+    var _useTpl = ChartNet.hasTemplates && ChartNet.hasTemplates();
+  var _gen = _useTpl ? ChartNet.generateRetrieval : ChartNet.generate;
+  setStatus(_useTpl ? '生成中（官谱配置检索式）…' : '生成中（模型）…', 'info');
+  res = _gen(pcm, bpm, off, level, function (p, phase) {
+      setBar(0.05 + p * 0.9);
+      setStatus('计算中… ' + phase + ' ' + Math.round(p * 100) + '%');
+    }, meta);
+  } catch (e) {
+    setStatus('生成失败: ' + e.message, 'bad');
+    $('#btnRun').disabled = false;
+    return;
+  }
+  var ms = Math.round(performance.now() - t0);
+  lastText = res.maidata;
+  lastEvents = res.events;
+
+  // stats
+  var byBtn = [0,0,0,0,0,0,0,0], kinds = {tap:0,hold:0,slide:0}, perSlot = {};
+  lastEvents.forEach(function (e) {
+    byBtn[e.button - 1]++;
+    kinds[e.kind]++;
+    perSlot[e.slot] = (perSlot[e.slot] || 0) + 1;
+  });
+  var n = lastEvents.length || 1;
+  var meas = Math.max(1, Math.max.apply(null, lastEvents.map(function (e) { return e.slot; }).concat([0])) / 96);
+  var dbl = Object.keys(perSlot).filter(function (k) { return perSlot[k] >= 2; }).length /
+            Math.max(Object.keys(perSlot).length, 1);
+  var right = (byBtn[0] + byBtn[1] + byBtn[2] + byBtn[3]) / n;
+
+  $('#stats').innerHTML =
+    '<span>音符 <b>' + lastEvents.length + '</b></span>' +
+    '<span>密度 <b>' + (lastEvents.length / meas).toFixed(2) + '</b>/小节</span>' +
+    '<span>tap/hold/slide <b>' + kinds.tap + '/' + kinds.hold + '/' + kinds.slide + '</b></span>' +
+    '<span>双押率 <b>' + (dbl * 100).toFixed(1) + '%</b></span>' +
+    '<span>右侧键 <b>' + (right * 100).toFixed(1) + '%</b></span>' +
+    '<span>耗时 <b>' + ms + ' ms</b></span>';
+  $('#out').textContent = lastText.slice(0, 8000) + (lastText.length > 8000 ? '\n…' : '');
+  setBar(1);
+  setStatus('完成 · ' + lastEvents.length + ' 个音符 · ' + (lastText.length / 1024).toFixed(1) + ' KB',
+            'ok');
+  $('#btnRun').disabled = false;
+  $('#btnSave').disabled = false;
+  $('#btnPreview').disabled = false;
+};
+
+/* --------------------------------------------------------------- save */
+$('#btnSave').onclick = async function () {
+  if (!lastText) return;
+  var fname = 'maidata.txt';
+
+  if (dirHandle) {
+    var exists = true;
+    try { await dirHandle.getFileHandle(fname); } catch (e) { exists = false; }
+    if (exists && !confirm('该目录下已存在 ' + fname + '，是否覆盖？')) {
+      setStatus('已取消保存。');
+      return;
+    }
+    try {
+      var fh = await dirHandle.getFileHandle(fname, { create: true });
+      var w = await fh.createWritable();
+      await w.write(lastText);
+      await w.close();
+      setStatus('已写入文件夹：' + fname, 'ok');
+    } catch (e) {
+      setStatus('写入失败: ' + e.message, 'bad');
+    }
+    return;
+  }
+
+  // no directory handle -> let the browser ask where to put it
+  if (window.showSaveFilePicker) {
+    try {
+      var h = await window.showSaveFilePicker({
+        suggestedName: fname,
+        types: [{ description: 'maidata', accept: { 'text/plain': ['.txt'] } }]
+      });
+      var ws = await h.createWritable();
+      await ws.write(lastText);
+      await ws.close();
+      setStatus('已保存：' + h.name, 'ok');
+    } catch (e) {
+      if (e && e.name !== 'AbortError') setStatus('保存失败: ' + e.message, 'bad');
+    }
+  } else {
+    var blob = new Blob([lastText], { type: 'text/plain;charset=utf-8' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = fname;
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+    setStatus('已下载 ' + fname, 'ok');
+  }
+};
+
+/* ------------------------------------------------------------ preview */
+$('#btnPreview').onclick = function () {
+  if (!lastText) return;
+  try {
+    localStorage.setItem('dsh_last_chart', lastText);
+    localStorage.setItem('dsh_last_chart_name', curName || 'generated');
+  } catch (e) {}
+  window.open('play.html', '_blank');
+};
+</script>
+</body>
+</html>
